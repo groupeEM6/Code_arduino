@@ -1,0 +1,183 @@
+//Algorithme du robot
+#include <SPI.h>
+#include <RF24.h>
+
+// NRF24L01
+RF24 radio(9, 10);  // CE, CSN
+const byte adresse[6] = "00001";
+
+// Plateau : 0 = vide, 1 = Adversaire, -1 = Home (robot)
+int board[9] = {0};
+
+// ----------------------------------
+// Détection d'un gagnant
+// ----------------------------------
+int gagnant(int b[9]) {
+    const int L[8][3] = {
+        {0,1,2},{3,4,5},{6,7,8},
+        {0,3,6},{1,4,7},{2,5,8},
+        {0,4,8},{2,4,6}
+    };
+    for (int i = 0; i < 8; i++) {
+        int a = L[i][0], c = L[i][1], d = L[i][2];
+        if (b[a] != 0 && b[a] == b[c] && b[c] == b[d])
+            return b[a];
+    }
+    return 0;
+}
+
+// Vérifie si le plateau est plein
+bool plein(int b[9]) {
+    for (int i = 0; i < 9; i++)
+        if (b[i] == 0) return false;
+    return true;
+}
+
+// Minimax pour Home
+int minimax(int b[9], int joueur) {
+    int win = gagnant(b);
+    if (win == -1) return 1;     // Home gagne
+    if (win == 1) return -1;     // Adversaire gagne
+    if (plein(b)) return 0;      // Match nul
+
+    int meilleur = (joueur == -1 ? -1000 : 1000);
+
+    for (int i = 0; i < 9; i++) {
+        if (b[i] == 0) {
+            b[i] = joueur;
+            int score = minimax(b, -joueur);
+            b[i] = 0;
+
+            if (joueur == -1)
+                meilleur = max(meilleur, score);
+            else
+                meilleur = min(meilleur, score);
+        }
+    }
+    return meilleur;
+}
+
+// Calcul du meilleur coup pour Home
+int meilleurCoup(int b[9]) {
+    int meilleurScore = -1000;
+    int coup = -1;
+
+    for (int i = 0; i < 9; i++) {
+        if (b[i] == 0) {
+            b[i] = -1;  // Home joue
+            int score = minimax(b, 1); // Adversaire joue ensuite
+            b[i] = 0;
+
+            if (score > meilleurScore) {
+                meilleurScore = score;
+                coup = i;
+            }
+        }
+    }
+    return coup;
+}
+
+// ----------------------------------
+// Placeholders pour fonctions mécaniques
+// ----------------------------------
+void movement(int caseIndex) {
+    // Déplace le robot vers la case correspondante
+    // caseIndex = 0..8
+    // Implémente ici ton code de servo/moteur
+    Serial.print("Déplacement vers case : ");
+    Serial.println(caseIndex);
+}
+
+void croix() {
+    // Trace une croix sur la case actuelle
+    Serial.println("Dessine une croix !");
+    // Implémente ici ton code pour dessiner
+}
+
+void rond() {
+    // Trace un rond sur la case actuelle
+    Serial.println("Dessine un rond !");
+    // Implémente ici ton code pour dessiner
+}
+
+// ----------------------------------
+// Variables de tour
+// ----------------------------------
+bool tourHome = true;  // Home commence par défaut
+
+// ----------------------------------
+// Setup
+// ----------------------------------
+void setup() {
+    Serial.begin(9600);
+
+    radio.begin();
+    radio.openReadingPipe(0, adresse);
+    radio.setPALevel(RF24_PA_MIN);
+    radio.startListening();
+
+    Serial.println("Robot Home TicTacToe démarré.");
+}
+
+// ----------------------------------
+// Boucle principale
+// ----------------------------------
+void loop() {
+
+    // 1. Lire coup Adversaire reçu
+    if (radio.available()) {
+        int coupAdversaire;
+        radio.read(&coupAdversaire, sizeof(coupAdversaire));
+
+        if (coupAdversaire >= 0 && coupAdversaire < 9) {
+            if (board[coupAdversaire] == 0) {
+                board[coupAdversaire] = 1; // Adversaire
+                Serial.print("Coup Adversaire reçu : ");
+                Serial.println(coupAdversaire);
+
+                tourHome = true; // Home peut jouer après
+            } else {
+                Serial.println("Case déjà occupée !");
+            }
+        }
+    }
+
+    // 2. Si c’est au Home de jouer
+    if (tourHome) {
+
+        int coupHome = meilleurCoup(board);
+
+        if (coupHome != -1) {
+            board[coupHome] = -1;
+            Serial.print("Home joue case : ");
+            Serial.println(coupHome);
+
+            // Déplacement physique
+            movement(coupHome);
+
+            // Dessin sur la case
+            croix();  // ou rond() selon ce que tu veux
+
+            // Envoyer coup Home par radio
+            radio.stopListening();
+            radio.write(&coupHome, sizeof(coupHome));
+            radio.startListening();
+
+            tourHome = false; // passe le tour à l’Adversaire
+        }
+    }
+
+    // 3. Vérification fin de partie
+    int w = gagnant(board);
+    if (w != 0) {
+        Serial.print("Partie terminée ! Gagnant : ");
+        Serial.println(w == -1 ? "Home" : "Adversaire");
+        while (true) delay(1000); // stop boucle
+    }
+    if (plein(board)) {
+        Serial.println("Match nul !");
+        while (true) delay(1000);
+    }
+
+    delay(100); // boucle rapide mais stable
+}
